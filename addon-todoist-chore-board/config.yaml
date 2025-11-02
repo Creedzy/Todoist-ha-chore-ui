@@ -1,0 +1,18 @@
+# addon-todoist-chore-board/config.yaml
+name: "Todoist Chore Board"
+version: "0.1.0"
+slug: "todoist_chore_board"
+description: "A WebUI for displaying and managing Todoist chores."
+arch:
+  - "armv7"
+  - "aarch64"
+  - "amd64"
+boot: "auto"
+webui: "http://[HOST]:[PORT:80]"
+ingress: true
+panel_icon: "mdi:check-circle-outline"
+options:
+  sensors: []
+schema:
+  sensors:
+    - "str"
