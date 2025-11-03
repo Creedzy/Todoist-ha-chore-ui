@@ -9,7 +9,7 @@ RUN npm run build
 
 # Serve the application using a lightweight web server
 FROM nginx:1.21-alpine
-RUN apk add --no-cache jq bash
+RUN apk add --no-cache jq bash gettext
 COPY --from=builder /app/dist /usr/share/nginx/html
 COPY run.sh /
 COPY nginx.conf.template /
