@@ -1,6 +1,6 @@
 # addon-todoist-chore-board/Dockerfile
 # Build the React application
-FROM node:18-alpine AS builder
+FROM node:20-alpine AS builder
 WORKDIR /app
 COPY web-ui/package.json web-ui/package-lock.json ./
 RUN npm install
