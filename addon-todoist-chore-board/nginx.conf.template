@@ -1,8 +1,10 @@
-server {
-    listen __PORT__;
-    location / {
-        root   /usr/share/nginx/html;
-        index  index.html;
-        try_files $uri $uri/ /index.html;
+http {
+    server {
+        listen __PORT__;
+        location / {
+            root   /usr/share/nginx/html;
+            index  index.html;
+            try_files $uri $uri/ /index.html;
+        }
     }
 }
