@@ -7,6 +7,21 @@ import {
 
 const LOG_BUFFER_KEY = '__TODOIST_ADDON_DEBUG_LOGS__';
 
+if (typeof globalThis === 'object') {
+  if (!Object.prototype.hasOwnProperty.call(globalThis, LOG_BUFFER_KEY)) {
+    try {
+      Object.defineProperty(globalThis, LOG_BUFFER_KEY, {
+        value: [],
+        writable: true,
+        configurable: true,
+      });
+  } catch {
+      // Fallback for environments that disallow defineProperty (older browsers).
+      globalThis[LOG_BUFFER_KEY] = [];
+    }
+  }
+}
+
 function emitLog(level, ...args) {
   const targetConsole = globalThis?.console;
   const payload = {
@@ -27,6 +42,8 @@ function emitLog(level, ...args) {
     }
   }
 }
+
+emitLog('debug', 'Todoist hass.js bundle initialised');
 
 let connection;
 
