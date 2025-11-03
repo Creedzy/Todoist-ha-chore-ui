@@ -2,6 +2,16 @@ events {}
 http {
     server {
         listen $PORT;
+
+        # Allow connections only from the Ingress proxy
+        allow 172.30.32.2;
+        deny all;
+
+        # Rewrite the URL to remove the Ingress path.
+        # This makes sure that the single-page application can find its assets.
+        rewrite ^/api/ingress/p/[^/]+/(.*)$ /$1 last;
+
+        # Serve the static files of the single-page application
         location / {
             root   /usr/share/nginx/html;
             index  index.html;
