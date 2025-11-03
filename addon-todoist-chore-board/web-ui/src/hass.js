@@ -8,14 +8,18 @@ import {
 let connection;
 
 async function connectToHass() {
-  if (connection) return connection;
+  if (connection) {
+    console.debug('Reusing cached Home Assistant connection');
+    return connection;
+  }
 
   try {
     // Reuse the existing Home Assistant connection when the UI is embedded via ingress.
     if (window.parent && window.parent !== window && window.parent.hassConnection) {
       try {
         connection = await window.parent.hassConnection;
-        return connection;
+          console.info('Using parent window Home Assistant connection');
+          return connection;
       } catch (parentErr) {
         console.warn('Falling back to standalone auth flow, reusing parent connection failed', parentErr);
       }
@@ -26,7 +30,19 @@ async function connectToHass() {
     const ingressMatch = currentUrl.pathname.match(/\/api\/hassio_ingress\/[\w-]+/);
     const ingressPath = ingressMatch ? `${ingressMatch[0]}/` : '/';
     const clientId = `${hassUrl}${ingressPath}`;
-    const redirectUrl = `${clientId}${currentUrl.search ?? ''}`;
+    const redirectUrlObj = new URL(clientId);
+    if (currentUrl.search) {
+      // Preserve any original query parameters when performing the auth dance.
+      redirectUrlObj.search = currentUrl.search;
+    }
+    redirectUrlObj.searchParams.set('auth_callback', '1');
+    const redirectUrl = redirectUrlObj.toString();
+
+      console.debug('Auth parameters resolved', {
+        hassUrl,
+        clientId,
+        redirectUrl,
+      });
 
     const auth = await getAuth({
       hassUrl,
@@ -35,6 +51,7 @@ async function connectToHass() {
     });
 
     connection = await createConnection({ auth });
+      console.info('Established new Home Assistant websocket connection');
     return connection;
   } catch (err) {
     console.error('Failed to connect to Home Assistant', err);
