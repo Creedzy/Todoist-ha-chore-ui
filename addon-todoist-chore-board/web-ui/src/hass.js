@@ -11,13 +11,22 @@ async function connectToHass() {
   if (connection) return connection;
 
   try {
+    // Reuse the existing Home Assistant connection when the UI is embedded via ingress.
+    if (window.parent && window.parent !== window && window.parent.hassConnection) {
+      try {
+        connection = await window.parent.hassConnection;
+        return connection;
+      } catch (parentErr) {
+        console.warn('Falling back to standalone auth flow, reusing parent connection failed', parentErr);
+      }
+    }
+
     const currentUrl = new URL(window.location.href);
     const hassUrl = `${currentUrl.protocol}//${currentUrl.host}`;
-    const normalizedPath = currentUrl.pathname.endsWith('/')
-      ? currentUrl.pathname
-      : `${currentUrl.pathname}/`;
-    const clientId = `${hassUrl}${normalizedPath}`;
-    const redirectUrl = currentUrl.href;
+    const ingressMatch = currentUrl.pathname.match(/\/api\/hassio_ingress\/[\w-]+/);
+    const ingressPath = ingressMatch ? `${ingressMatch[0]}/` : '/';
+    const clientId = `${hassUrl}${ingressPath}`;
+    const redirectUrl = `${clientId}${currentUrl.search ?? ''}`;
 
     const auth = await getAuth({
       hassUrl,
