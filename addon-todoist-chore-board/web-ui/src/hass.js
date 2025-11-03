@@ -5,11 +5,34 @@ import {
   subscribeEntities,
 } from 'home-assistant-js-websocket';
 
+const LOG_BUFFER_KEY = '__TODOIST_ADDON_DEBUG_LOGS__';
+
+function emitLog(level, ...args) {
+  const targetConsole = globalThis?.console;
+  const payload = {
+    level,
+    timestamp: new Date().toISOString(),
+    messages: args,
+  };
+  const buffer = (globalThis[LOG_BUFFER_KEY] = globalThis[LOG_BUFFER_KEY] || []);
+  buffer.push(payload);
+
+  const writer = targetConsole?.[level] ?? targetConsole?.log;
+  if (writer) {
+    try {
+      writer.call(targetConsole, '[Todoist Add-on]', ...args);
+    } catch (logErr) {
+      // Last resort logging; avoid throwing if console is locked down.
+      targetConsole?.log?.('[Todoist Add-on log error]', logErr);
+    }
+  }
+}
+
 let connection;
 
 async function connectToHass() {
   if (connection) {
-    console.debug('Reusing cached Home Assistant connection');
+    emitLog('debug', 'Reusing cached Home Assistant connection');
     return connection;
   }
 
@@ -18,16 +41,16 @@ async function connectToHass() {
     if (window.parent && window.parent !== window && window.parent.hassConnection) {
       try {
         connection = await window.parent.hassConnection;
-          console.info('Using parent window Home Assistant connection');
+        emitLog('info', 'Using parent window Home Assistant connection');
           return connection;
       } catch (parentErr) {
-        console.warn('Falling back to standalone auth flow, reusing parent connection failed', parentErr);
+        emitLog('warn', 'Falling back to standalone auth flow, parent connection reuse failed', parentErr);
       }
     }
 
     const currentUrl = new URL(window.location.href);
     const hassUrl = `${currentUrl.protocol}//${currentUrl.host}`;
-    const ingressMatch = currentUrl.pathname.match(/\/api\/hassio_ingress\/[\w-]+/);
+    const ingressMatch = currentUrl.pathname.match(/\/(?:api\/)?hassio_ingress\/[\w-]+/);
     const ingressPath = ingressMatch ? `${ingressMatch[0]}/` : '/';
     const clientId = `${hassUrl}${ingressPath}`;
     const redirectUrlObj = new URL(clientId);
@@ -38,11 +61,7 @@ async function connectToHass() {
     redirectUrlObj.searchParams.set('auth_callback', '1');
     const redirectUrl = redirectUrlObj.toString();
 
-      console.debug('Auth parameters resolved', {
-        hassUrl,
-        clientId,
-        redirectUrl,
-      });
+    emitLog('debug', 'Auth parameters resolved', { hassUrl, clientId, redirectUrl });
 
     const auth = await getAuth({
       hassUrl,
@@ -51,10 +70,10 @@ async function connectToHass() {
     });
 
     connection = await createConnection({ auth });
-      console.info('Established new Home Assistant websocket connection');
+    emitLog('info', 'Established new Home Assistant websocket connection');
     return connection;
   } catch (err) {
-    console.error('Failed to connect to Home Assistant', err);
+    emitLog('error', 'Failed to connect to Home Assistant', err);
     throw err;
   }
 }
