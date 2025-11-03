@@ -17,6 +17,9 @@ sed -i "s#</head>#${CONFIG_SCRIPT}</head>#" "${INDEX_FILE}"
 
 echo "Injected config into index.html"
 
+# Generate nginx config from template
+sed "s/__PORT__/${PORT}/g" /nginx.conf.template > /etc/nginx/nginx.conf
+
 # Start nginx
 echo "Starting nginx..."
-nginx -g "daemon off;"
+nginx -c /etc/nginx/nginx.conf -g "daemon off;"

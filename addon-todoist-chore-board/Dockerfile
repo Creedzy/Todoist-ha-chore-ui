@@ -12,6 +12,7 @@ FROM nginx:1.21-alpine
 RUN apk add --no-cache jq bash
 COPY --from=builder /app/dist /usr/share/nginx/html
 COPY run.sh /
+COPY nginx.conf.template /
 RUN chmod +x /run.sh
 EXPOSE 80
 CMD [ "/run.sh" ]
