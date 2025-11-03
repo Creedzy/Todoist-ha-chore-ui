@@ -11,7 +11,20 @@ async function connectToHass() {
   if (connection) return connection;
 
   try {
-    const auth = await getAuth({ hassUrl: window.location.origin });
+    const currentUrl = new URL(window.location.href);
+    const hassUrl = `${currentUrl.protocol}//${currentUrl.host}`;
+    const normalizedPath = currentUrl.pathname.endsWith('/')
+      ? currentUrl.pathname
+      : `${currentUrl.pathname}/`;
+    const clientId = `${hassUrl}${normalizedPath}`;
+    const redirectUrl = currentUrl.href;
+
+    const auth = await getAuth({
+      hassUrl,
+      clientId,
+      redirectUrl,
+    });
+
     connection = await createConnection({ auth });
     return connection;
   } catch (err) {
