@@ -1,6 +1,6 @@
 http {
     server {
-        listen __PORT__;
+        listen $PORT;
         location / {
             root   /usr/share/nginx/html;
             index  index.html;
