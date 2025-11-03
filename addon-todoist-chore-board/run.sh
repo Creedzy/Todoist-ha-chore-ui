@@ -17,6 +17,9 @@ sed -i "s#</head>#${CONFIG_SCRIPT}</head>#" "${INDEX_FILE}"
 
 echo "Injected config into index.html"
 
+# Set a default for the PORT variable and export it
+export PORT=${PORT:-80}
+
 # Generate nginx config from template
 envsubst '$PORT' < /nginx.conf.template > /etc/nginx/nginx.conf
 
