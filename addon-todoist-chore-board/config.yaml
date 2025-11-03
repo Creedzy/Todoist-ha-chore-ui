@@ -1,6 +1,6 @@
 # addon-todoist-chore-board/config.yaml
 name: "Todoist Chore Board"
-version: "0.1.10"
+version: "0.1.11"
 slug: "todoist_chore_board"
 description: "A WebUI for displaying and managing Todoist chores."
 arch:

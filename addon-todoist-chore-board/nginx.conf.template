@@ -14,6 +14,12 @@ http {
         # This makes sure that the single-page application can find its assets.
     rewrite ^/api/hassio_ingress/[^/]+/(.*)$ /$1 last;
 
+        # Lightweight health endpoint Home Assistant calls to keep ingress alive
+        location = /validate_session {
+            default_type application/json;
+            return 200 '{"status":"ok"}';
+        }
+
         # Serve the static files of the single-page application
         location / {
             root   /usr/share/nginx/html;
