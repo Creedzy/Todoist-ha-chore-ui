@@ -43,7 +43,7 @@ function emitLog(level, ...args) {
   }
 }
 
-emitLog('debug', 'Todoist hass.js bundle initialised');
+emitLog('info', 'Todoist hass.js bundle initialised');
 
 let connection;
 
@@ -71,14 +71,15 @@ async function connectToHass() {
     const ingressPath = ingressMatch ? `${ingressMatch[0]}/` : '/';
     const clientId = `${hassUrl}${ingressPath}`;
     const redirectUrlObj = new URL(clientId);
-    if (currentUrl.search) {
-      // Preserve any original query parameters when performing the auth dance.
-      redirectUrlObj.search = currentUrl.search;
-    }
-    redirectUrlObj.searchParams.set('auth_callback', '1');
+    const redirectParams = new URLSearchParams(currentUrl.search);
+    redirectParams.delete('code');
+    redirectParams.delete('state');
+    redirectParams.delete('auth_callback');
+    redirectParams.set('auth_callback', '1');
+    redirectUrlObj.search = redirectParams.toString();
     const redirectUrl = redirectUrlObj.toString();
 
-    emitLog('debug', 'Auth parameters resolved', { hassUrl, clientId, redirectUrl });
+  emitLog('info', 'Auth parameters resolved', { hassUrl, clientId, redirectUrl });
 
     const auth = await getAuth({
       hassUrl,
