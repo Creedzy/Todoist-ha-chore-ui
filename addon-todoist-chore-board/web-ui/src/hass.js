@@ -54,6 +54,15 @@ async function connectToHass() {
   }
 
   try {
+    emitLog('debug', 'Parent frame inspection', {
+      sameWindow: window.parent === window,
+      hasParent: Boolean(window.parent),
+      parentHasHassConnection: Boolean(window.parent?.hassConnection),
+      parentConnectionType: typeof window.parent?.hassConnection,
+      parentConnectionHasThen:
+        typeof window.parent?.hassConnection?.then === 'function',
+    });
+
     // Reuse the existing Home Assistant connection when the UI is embedded via ingress.
     if (window.parent && window.parent !== window && window.parent.hassConnection) {
       try {
