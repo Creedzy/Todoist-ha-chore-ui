@@ -30,25 +30,44 @@ const ChoreBoard = () => {
 
     fetchInitialState();
 
-    const unsubscribe = subscribeToEntities(entities => {
-      setSensors(prevSensors =>
-        prevSensors.map(sensor => {
-          const newState = entities[sensor.id];
-          if (newState) {
-            return {
-              ...sensor,
-              tasks: newState.attributes.tasks || [],
-              stars: newState.attributes.stars || 0,
-            };
-          }
-          return sensor;
-        })
-      );
-    });
+    let unsubscribe = null;
+    let cancelled = false;
+
+    async function startSubscription() {
+      try {
+        const stop = await subscribeToEntities(entities => {
+          setSensors(prevSensors =>
+            prevSensors.map(sensor => {
+              const newState = entities[sensor.id];
+              if (newState) {
+                return {
+                  ...sensor,
+                  tasks: newState.attributes.tasks || [],
+                  stars: newState.attributes.stars || 0,
+                };
+              }
+              return sensor;
+            })
+          );
+        });
+
+        if (cancelled) {
+          stop();
+          return;
+        }
+
+        unsubscribe = stop;
+      } catch (error) {
+        console.error('Failed to subscribe to entity updates:', error);
+      }
+    }
+
+    startSubscription();
 
     return () => {
-      if (unsubscribe.then) {
-        unsubscribe.then(unsub => unsub());
+      cancelled = true;
+      if (unsubscribe) {
+        unsubscribe();
       }
     };
   }, [configuredSensors]);

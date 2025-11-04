@@ -1,11 +1,16 @@
 // addon-todoist-chore-board/web-ui/src/hass.js
 import {
-  getAuth,
+  callService as callHassService,
   createConnection,
+  createLongLivedTokenAuth,
+  getAuth,
+  getStates as fetchStates,
   subscribeEntities,
 } from 'home-assistant-js-websocket';
 
 const LOG_BUFFER_KEY = '__TODOIST_ADDON_DEBUG_LOGS__';
+const TOKEN_STORAGE_PREFIX = '__TODOIST_ADDON_HASS_TOKENS__';
+const AUTH_CALLBACK_PARAM = 'auth_callback';
 
 if (typeof globalThis === 'object') {
   if (!Object.prototype.hasOwnProperty.call(globalThis, LOG_BUFFER_KEY)) {
@@ -15,8 +20,7 @@ if (typeof globalThis === 'object') {
         writable: true,
         configurable: true,
       });
-  } catch {
-      // Fallback for environments that disallow defineProperty (older browsers).
+    } catch {
       globalThis[LOG_BUFFER_KEY] = [];
     }
   }
@@ -37,7 +41,6 @@ function emitLog(level, ...args) {
     try {
       writer.call(targetConsole, '[Todoist Add-on]', ...args);
     } catch (logErr) {
-      // Last resort logging; avoid throwing if console is locked down.
       targetConsole?.log?.('[Todoist Add-on log error]', logErr);
     }
   }
@@ -45,84 +48,263 @@ function emitLog(level, ...args) {
 
 emitLog('info', 'Todoist hass.js bundle initialised');
 
-let connection;
+let cachedConnection = null;
+let connectionPromise = null;
+let activeAuth = null;
 
-async function connectToHass() {
-  if (connection) {
-    emitLog('debug', 'Reusing cached Home Assistant connection');
-    return connection;
+function getDevAuthConfig() {
+  const env = typeof import.meta !== 'undefined' ? import.meta.env : undefined;
+  const envUrl = env?.VITE_HOME_ASSISTANT_URL ?? env?.VITE_HA_URL;
+  const envToken = env?.VITE_HOME_ASSISTANT_TOKEN ?? env?.VITE_HA_TOKEN;
+
+  if (envToken && !envUrl) {
+    emitLog(
+      'warn',
+      'Ignoring provided Home Assistant token because no VITE_HOME_ASSISTANT_URL was found'
+    );
+  }
+
+  if (envUrl && envToken) {
+    return { hassUrl: envUrl, token: envToken, source: 'env' };
+  }
+
+  const globalDevAuth = globalThis?.TODOIST_DEV_AUTH ?? globalThis?.ADDON_DEV_AUTH;
+  if (globalDevAuth?.token && globalDevAuth?.hassUrl) {
+    return { ...globalDevAuth, source: 'window' };
+  }
+
+  return null;
+}
+
+function resolveTokenStorageKey(hassUrl) {
+  return `${TOKEN_STORAGE_PREFIX}:${hassUrl}`;
+}
+
+function persistTokens(hassUrl, tokens) {
+  if (!hassUrl) {
+    return;
   }
 
   try {
-    emitLog('debug', 'Parent frame inspection', {
-      sameWindow: window.parent === window,
-      hasParent: Boolean(window.parent),
-      parentHasHassConnection: Boolean(window.parent?.hassConnection),
-      parentConnectionType: typeof window.parent?.hassConnection,
-      parentConnectionHasThen:
-        typeof window.parent?.hassConnection?.then === 'function',
-    });
-
-    // Reuse the existing Home Assistant connection when the UI is embedded via ingress.
-    if (window.parent && window.parent !== window && window.parent.hassConnection) {
-      try {
-        connection = await window.parent.hassConnection;
-        emitLog('info', 'Using parent window Home Assistant connection');
-          return connection;
-      } catch (parentErr) {
-        emitLog('warn', 'Falling back to standalone auth flow, parent connection reuse failed', parentErr);
-      }
+    const key = resolveTokenStorageKey(hassUrl);
+    if (!tokens) {
+      localStorage.removeItem(key);
+      return;
     }
-
-  const currentUrl = new URL(window.location.href);
-    const hassUrl = `${currentUrl.protocol}//${currentUrl.host}`;
-    const ingressMatch = currentUrl.pathname.match(/\/(?:api\/)?hassio_ingress\/[\w-]+/);
-    const ingressPath = ingressMatch ? `${ingressMatch[0]}/` : '/';
-    const clientId = `${hassUrl}${ingressPath}`;
-    const redirectUrlObj = new URL(clientId);
-    const redirectParams = new URLSearchParams(currentUrl.search);
-    redirectParams.delete('code');
-    redirectParams.delete('state');
-    redirectParams.delete('auth_callback');
-    redirectParams.set('auth_callback', '1');
-    redirectUrlObj.search = redirectParams.toString();
-    const redirectUrl = redirectUrlObj.toString();
-
-    emitLog('info', 'Auth parameters resolved', {
-      hassUrl,
-      clientId,
-      redirectUrl,
-      locationPathname: currentUrl.pathname,
-      locationSearch: currentUrl.search,
-    });
-
-    const auth = await getAuth({
-      hassUrl,
-      clientId,
-      redirectUrl,
-    });
-
-    connection = await createConnection({ auth });
-    emitLog('info', 'Established new Home Assistant websocket connection');
-    return connection;
+    localStorage.setItem(key, JSON.stringify(tokens));
   } catch (err) {
-    emitLog('error', 'Failed to connect to Home Assistant', err);
-    throw err;
+    emitLog('warn', 'Unable to persist Home Assistant auth tokens', err);
   }
 }
 
-export async function subscribeToEntities(entities, callback) {
-  const conn = await connectToHass();
+function readTokens(hassUrl) {
+  if (!hassUrl) {
+    return null;
+  }
+
+  try {
+    const raw = localStorage.getItem(resolveTokenStorageKey(hassUrl));
+    if (!raw) {
+      return null;
+    }
+    return JSON.parse(raw);
+  } catch (err) {
+    emitLog('warn', 'Failed to read stored Home Assistant auth tokens; clearing cache', err);
+    try {
+      localStorage.removeItem(resolveTokenStorageKey(hassUrl));
+    } catch (cleanupErr) {
+      emitLog('debug', 'Failed to clear corrupted token cache', cleanupErr);
+    }
+    return null;
+  }
+}
+
+function clearAuthParamsFromUrl() {
+  try {
+    const url = new URL(window.location.href);
+    if (!url.searchParams.has(AUTH_CALLBACK_PARAM)) {
+      return;
+    }
+
+    url.searchParams.delete(AUTH_CALLBACK_PARAM);
+    url.searchParams.delete('code');
+    url.searchParams.delete('state');
+
+    const newSearch = url.searchParams.toString();
+    const newUrl = `${url.pathname}${newSearch ? `?${newSearch}` : ''}${url.hash}`;
+    history.replaceState(null, '', newUrl);
+    emitLog('debug', 'Cleared auth_callback parameters from URL');
+  } catch (err) {
+    emitLog('debug', 'Failed to clear auth params from URL', err);
+  }
+}
+
+function resolveAuthEndpoints() {
+  const currentUrl = new URL(window.location.href);
+  const hassUrl = `${currentUrl.protocol}//${currentUrl.host}`;
+  const ingressMatch = currentUrl.pathname.match(/\/(?:api\/)?hassio_ingress\/[\w-]+/);
+  const ingressPath = ingressMatch ? `${ingressMatch[0]}/` : '/';
+
+  const clientUrl = new URL(ingressPath, hassUrl);
+  const redirectUrl = new URL(clientUrl.toString());
+  const redirectParams = new URLSearchParams(currentUrl.search);
+  redirectParams.delete('code');
+  redirectParams.delete('state');
+  redirectParams.set(AUTH_CALLBACK_PARAM, '1');
+  redirectUrl.search = redirectParams.toString();
+  redirectUrl.hash = currentUrl.hash;
+
+  return {
+    hassUrl,
+    clientId: clientUrl.toString(),
+    redirectUrl: redirectUrl.toString(),
+  };
+}
+
+async function tryInheritedConnection() {
+  try {
+    if (window.top === window || !window.top) {
+      emitLog('debug', 'No parent frame available for hassConnection inheritance');
+      return null;
+    }
+
+    const parentConnection = window.top.hassConnection;
+    if (!parentConnection) {
+      emitLog('debug', 'Parent frame has no hassConnection promise');
+      return null;
+    }
+
+    emitLog('info', 'Attempting to reuse Home Assistant connection from parent frame');
+    const resolved = await parentConnection;
+    const connection = resolved?.conn ?? resolved?.connection ?? resolved;
+    const auth = resolved?.auth ?? connection?.options?.auth ?? null;
+
+    if (!connection) {
+      emitLog('warn', 'Parent hassConnection resolved without a usable connection payload', resolved);
+      return null;
+    }
+
+    return { connection, auth };
+  } catch (err) {
+    emitLog('warn', 'Failed to inherit hassConnection from parent frame', err);
+    return null;
+  }
+}
+
+async function createProvidedTokenAuth(hassUrl) {
+  const devAuth = getDevAuthConfig();
+  if (!devAuth) {
+    return null;
+  }
+
+  const resolvedUrl = devAuth.hassUrl ?? hassUrl;
+  emitLog('info', `Using provided long-lived access token (${devAuth.source}) for Home Assistant connection`);
+  const auth = await createLongLivedTokenAuth(resolvedUrl, devAuth.token);
+  return auth;
+}
+
+async function createStandaloneConnection() {
+  const endpoints = resolveAuthEndpoints();
+
+  const providedAuth = await createProvidedTokenAuth(endpoints.hassUrl).catch((err) => {
+    emitLog('error', 'Failed to authenticate using provided long-lived token', err);
+    throw err;
+  });
+
+  if (providedAuth) {
+    const connection = await createConnection({ auth: providedAuth });
+    return { connection, auth: providedAuth };
+  }
+
+  let auth;
+  const options = {
+    hassUrl: endpoints.hassUrl,
+    clientId: endpoints.clientId,
+    redirectUrl: endpoints.redirectUrl,
+    saveTokens: (tokens) => persistTokens(tokens?.hassUrl ?? endpoints.hassUrl, tokens),
+    loadTokens: () => Promise.resolve(readTokens(endpoints.hassUrl)),
+  };
+
+  try {
+    auth = await getAuth(options);
+    emitLog('info', 'Obtained Home Assistant auth via standalone flow', {
+      hassUrl: endpoints.hassUrl,
+      clientId: endpoints.clientId,
+    });
+  } catch (err) {
+    if (typeof err === 'object' && err !== null && err.error === 'invalid_grant') {
+      emitLog('warn', 'Received invalid_grant from Home Assistant; clearing stored tokens and retrying');
+      persistTokens(endpoints.hassUrl, null);
+      return createStandaloneConnection();
+    }
+
+    emitLog('error', 'Failed to obtain Home Assistant auth via standalone flow', err);
+    throw err;
+  }
+
+  clearAuthParamsFromUrl();
+  const connection = await createConnection({ auth });
+  return { connection, auth };
+}
+
+async function establishConnection() {
+  const inherited = await tryInheritedConnection();
+  if (inherited) {
+    emitLog('info', 'Reusing Home Assistant connection inherited from parent frame');
+    return inherited;
+  }
+
+  emitLog('info', 'Falling back to standalone Home Assistant auth flow');
+  return createStandaloneConnection();
+}
+
+async function getConnection() {
+  if (cachedConnection) {
+    return cachedConnection;
+  }
+
+  if (!connectionPromise) {
+    connectionPromise = establishConnection()
+      .then(({ connection, auth }) => {
+        cachedConnection = connection;
+        activeAuth = auth ?? connection?.options?.auth ?? null;
+
+        if (!window.hassConnection) {
+          window.hassConnection = Promise.resolve({ conn: connection, auth: activeAuth });
+        }
+
+        return connection;
+      })
+      .catch((err) => {
+        connectionPromise = null;
+        throw err;
+      });
+  }
+
+  return connectionPromise;
+}
+
+export async function subscribeToEntities(callback) {
+  const conn = await getConnection();
   return subscribeEntities(conn, callback);
 }
 
 export async function getStates() {
-    const conn = await connectToHass();
-    const states = await conn.getStates();
-    return states;
-  }
+  const conn = await getConnection();
+  const statesArray = await fetchStates(conn);
+  return Array.isArray(statesArray)
+    ? statesArray.reduce((acc, entity) => {
+        acc[entity.entity_id] = entity;
+        return acc;
+      }, {})
+    : statesArray || {};
+}
 
 export async function callService(domain, service, serviceData) {
-  const conn = await connectToHass();
-  return conn.callService(domain, service, serviceData);
+  const conn = await getConnection();
+  return callHassService(conn, domain, service, serviceData);
+}
+
+export function getActiveAuth() {
+  return activeAuth;
 }
