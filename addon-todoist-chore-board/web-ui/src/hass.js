@@ -65,7 +65,7 @@ async function connectToHass() {
       }
     }
 
-    const currentUrl = new URL(window.location.href);
+  const currentUrl = new URL(window.location.href);
     const hassUrl = `${currentUrl.protocol}//${currentUrl.host}`;
     const ingressMatch = currentUrl.pathname.match(/\/(?:api\/)?hassio_ingress\/[\w-]+/);
     const ingressPath = ingressMatch ? `${ingressMatch[0]}/` : '/';
@@ -79,7 +79,13 @@ async function connectToHass() {
     redirectUrlObj.search = redirectParams.toString();
     const redirectUrl = redirectUrlObj.toString();
 
-  emitLog('info', 'Auth parameters resolved', { hassUrl, clientId, redirectUrl });
+    emitLog('info', 'Auth parameters resolved', {
+      hassUrl,
+      clientId,
+      redirectUrl,
+      locationPathname: currentUrl.pathname,
+      locationSearch: currentUrl.search,
+    });
 
     const auth = await getAuth({
       hassUrl,
