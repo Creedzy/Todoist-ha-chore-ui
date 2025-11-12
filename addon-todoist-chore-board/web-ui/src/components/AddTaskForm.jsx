@@ -2,12 +2,14 @@
 import React, { useState } from 'react';
 import { callService } from '../hass';
 
-const AddTaskForm = ({ entityId }) => {
+const AddTaskForm = ({ entityId, accentColor }) => {
   const [task, setTask] = useState('');
 
   const handleSubmit = async (e) => {
     e.preventDefault();
-    if (!task) return;
+    if (!task.trim()) {
+      return;
+    }
 
     try {
       await callService('todo', 'add_item', {
@@ -20,16 +22,22 @@ const AddTaskForm = ({ entityId }) => {
     }
   };
 
+  const buttonStyle = {
+    backgroundColor: accentColor,
+  };
+
   return (
-    <form onSubmit={handleSubmit} className="flex gap-2 mb-4">
+    <form className="add-task" onSubmit={handleSubmit}>
       <input
         type="text"
         value={task}
         onChange={(e) => setTask(e.target.value)}
-        placeholder="Add a new task"
-        className="flex-grow p-2 border rounded-lg focus:ring-blue-500 focus:border-blue-500"
+        placeholder="Add a new chore"
+        className="add-task__input"
       />
-      <button type="submit" className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700">Add</button>
+      <button type="submit" className="add-task__button" style={buttonStyle} aria-label="Add chore">
+        <span aria-hidden="true">+</span>
+      </button>
     </form>
   );
 };

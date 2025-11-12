@@ -1,16 +1,36 @@
-# React + Vite
+# Todoist Chore Board Web UI
 
-This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
+This package contains the React SPA that powers the Todoist chore board Home Assistant add-on. It is bundled with Vite for production and can connect directly to a running Home Assistant instance during development.
 
-Currently, two official plugins are available:
+## Development Workflows
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Babel](https://babeljs.io/) (or [oxc](https://oxc.rs) when used in [rolldown-vite](https://vite.dev/guide/rolldown)) for Fast Refresh
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/) for Fast Refresh
+From this directory: `cd addon-todoist-chore-board/web-ui`.
 
-## React Compiler
+### 1. Connecting to a Home Assistant instance
 
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
+When you do want to target a live Home Assistant server, supply the base URL and an optional long-lived access token (LLAT):
 
-## Expanding the ESLint configuration
+```sh
+VITE_HOME_ASSISTANT_URL="https://homeassistant.local:8123" \
+VITE_HOME_ASSISTANT_TOKEN="<LLAT>" \
+VITE_TODOIST_SENSORS="sensor.todoist_hari_chores,sensor.todoist_simona_chores" \
+npm run dev
+```
 
-If you are developing a production application, we recommend using TypeScript with type-aware lint rules enabled. Check out the [TS template](https://github.com/vitejs/vite/tree/main/packages/create-vite/template-react-ts) for information on how to integrate TypeScript and [`typescript-eslint`](https://typescript-eslint.io) in your project.
+- If both values are supplied the UI skips the login redirect loop.
+- If only `VITE_HOME_ASSISTANT_URL` is provided you will be prompted through the standard auth flow.
+- Provide `VITE_TODOIST_SENSORS` as a comma-separated list matching the sensor IDs configured in Home Assistant. Without it, the dev server shows the “No sensors configured” placeholder.
+
+## Building for the add-on bundle
+
+```sh
+npm run build
+```
+
+The compiled assets are emitted to `dist/` and copied into the add-on container during build.
+
+## Project Structure Highlights
+
+- `src/hass.js` – manages Home Assistant authentication/connection reuse for both ingress and local development.
+- `src/main.jsx` – seeds `window.ADDON_CONFIG` during development using `VITE_TODOIST_SENSORS`.
+- `run.sh` (root add-on dir) injects configured sensor IDs into the served `index.html`.
