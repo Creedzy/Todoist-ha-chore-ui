@@ -4,7 +4,7 @@ import ProfileColumn from './ProfileColumn';
 import TaskEditorModal from './TaskEditorModal';
 import TaskDetailModal from './TaskDetailModal';
 import SettingsModal from './SettingsModal';
-import { getStates, subscribeToEntities } from '../hass';
+import { getStates, subscribeToEntities, startTiming, emitLog as logClientMessage } from '../hass';
 
 const SEGMENTS = [
   { id: 'chores', label: 'Chores', icon: '🧹' },
@@ -680,58 +680,64 @@ const ChoreBoard = () => {
 
   const buildSensorModel = useCallback(
     (sensorId, state) => {
-      const now = new Date();
-    const name = state?.attributes?.friendly_name || sensorId;
-    const palette = { ...derivePalette(name) };
-      const allTasks = Array.isArray(state?.attributes?.tasks)
-        ? state.attributes.tasks
-        : [];
-      const projectAttr = state?.attributes?.project || null;
-      const projectIdAttr = state?.attributes?.project_id;
-      const projectId =
-        projectIdAttr != null
-          ? projectIdAttr
-          : projectAttr && typeof projectAttr === 'object'
-          ? projectAttr.id ?? null
-          : null;
-      const resolvedProjectId =
-        projectId != null && projectId !== '' ? String(projectId) : null;
-      const project = projectAttr;
-      const labelOptionsRaw = Array.isArray(state?.attributes?.label_options)
-        ? state.attributes.label_options
-        : [];
-      const labelsByIdAttr = state?.attributes?.labels_by_id;
-      const labelLookup = labelOptionsRaw.reduce((acc, option) => {
-        if (!option) {
+      const endTiming = startTiming('ChoreBoard.buildSensorModel', {
+        sensorId,
+      });
+  let tasksCount = 0;
+  let completedCountValue = 0;
+      try {
+        const now = new Date();
+        const name = state?.attributes?.friendly_name || sensorId;
+        const palette = { ...derivePalette(name) };
+        const allTasks = Array.isArray(state?.attributes?.tasks)
+          ? state.attributes.tasks
+          : [];
+        const projectAttr = state?.attributes?.project || null;
+        const projectIdAttr = state?.attributes?.project_id;
+        const projectId =
+          projectIdAttr != null
+            ? projectIdAttr
+            : projectAttr && typeof projectAttr === 'object'
+            ? projectAttr.id ?? null
+            : null;
+        const resolvedProjectId =
+          projectId != null && projectId !== '' ? String(projectId) : null;
+        const project = projectAttr;
+        const labelOptionsRaw = Array.isArray(state?.attributes?.label_options)
+          ? state.attributes.label_options
+          : [];
+        const labelsByIdAttr = state?.attributes?.labels_by_id;
+        const labelLookup = labelOptionsRaw.reduce((acc, option) => {
+          if (!option) {
+            return acc;
+          }
+          const optionId = option.id ?? option.label ?? option.value;
+          const optionName = option.name ?? option.title ?? option.label ?? optionId;
+          if (optionId != null) {
+            acc[String(optionId)] = String(optionName);
+          }
+          if (optionName != null) {
+            acc[String(optionName)] = String(optionName);
+          }
           return acc;
+        }, {});
+        if (labelsByIdAttr && typeof labelsByIdAttr === 'object') {
+          Object.entries(labelsByIdAttr).forEach(([key, value]) => {
+            if (typeof value === 'string') {
+              labelLookup[String(key)] = value;
+            }
+          });
         }
-        const optionId = option.id ?? option.label ?? option.value;
-        const optionName = option.name ?? option.title ?? option.label ?? optionId;
-        if (optionId != null) {
-          acc[String(optionId)] = String(optionName);
-        }
-        if (optionName != null) {
-          acc[String(optionName)] = String(optionName);
-        }
-        return acc;
-      }, {});
-      if (labelsByIdAttr && typeof labelsByIdAttr === 'object') {
-        Object.entries(labelsByIdAttr).forEach(([key, value]) => {
-          if (typeof value === 'string') {
-            labelLookup[String(key)] = value;
+        const taskLookup = new Map();
+        allTasks.forEach(task => {
+          const rawId = task?.id || task?.uid;
+          if (rawId) {
+            taskLookup.set(rawId, task);
           }
         });
-      }
-      const taskLookup = new Map();
-      allTasks.forEach(task => {
-        const rawId = task?.id || task?.uid;
-        if (rawId) {
-          taskLookup.set(rawId, task);
-        }
-      });
-      const normalised = allTasks
-        .map(task => normaliseTask(task, now, labelLookup))
-        .filter(Boolean);
+        const normalised = allTasks
+          .map(task => normaliseTask(task, now, labelLookup))
+          .filter(Boolean);
       console.log('[ChoreBoard] Normalised tasks', {
         sensorId,
         total: normalised.length,
@@ -756,28 +762,28 @@ const ChoreBoard = () => {
           dueDatetime: task.raw?.due?.datetime,
         }))
       );
-      const rootTasks = normalised.filter(task => {
-        const raw = task?.uid ? taskLookup.get(task.uid) : null;
-        return raw ? raw.parent_id == null : true;
-      });
-      const overriddenTasks = rootTasks.map(task => {
-        const overrideKey = `${sensorId}:${task.id ?? task.uid ?? ''}`;
-        const override = statusOverrides[overrideKey];
-        if (!override) {
-          return task;
-        }
-        if (override.isCompleted === task.isCompleted) {
-          return task;
-        }
-        return {
-          ...task,
-          isCompleted: override.isCompleted,
-          completedAt: override.isCompleted ? override.completedAt : null,
-          overdueLabel: override.isCompleted ? null : task.overdueLabel,
-        };
-      });
-      const sortedTasks = overriddenTasks.slice().sort(compareTasks);
-      const completedCount = overriddenTasks.filter(task => task.isCompleted).length;
+        const rootTasks = normalised.filter(task => {
+          const raw = task?.uid ? taskLookup.get(task.uid) : null;
+          return raw ? raw.parent_id == null : true;
+        });
+        const overriddenTasks = rootTasks.map(task => {
+          const overrideKey = `${sensorId}:${task.id ?? task.uid ?? ''}`;
+          const override = statusOverrides[overrideKey];
+          if (!override) {
+            return task;
+          }
+          if (override.isCompleted === task.isCompleted) {
+            return task;
+          }
+          return {
+            ...task,
+            isCompleted: override.isCompleted,
+            completedAt: override.isCompleted ? override.completedAt : null,
+            overdueLabel: override.isCompleted ? null : task.overdueLabel,
+          };
+        });
+        const sortedTasks = overriddenTasks.slice().sort(compareTasks);
+        const completedCount = overriddenTasks.filter(task => task.isCompleted).length;
       console.log('[ChoreBoard] Final sensor model', {
         sensorId,
         total: sortedTasks.length,
@@ -801,29 +807,37 @@ const ChoreBoard = () => {
           completedAt: task.completedAt,
         }))
       );
-      const todoEntityId = sensorId.startsWith('sensor.')
-        ? sensorId.replace('sensor.', 'todo.')
-        : sensorId;
-      return {
-        id: sensorId,
-        name,
-        palette,
-        initials: deriveInitials(name),
-        tasks: sortedTasks,
-        stars: state?.attributes?.stars || 0,
-        entityId: todoEntityId,
-        progress: {
-          completed: completedCount,
-          total: overriddenTasks.length,
-        },
-  projectId: resolvedProjectId,
-        project,
-        labelOptions: labelOptionsRaw.map(option => ({
-          id: option?.id ?? option?.label ?? option?.name ?? option,
-          name: option?.name ?? option?.label ?? option?.title ?? option?.id ?? option,
-        })),
-        labelLookup,
-      };
+        const todoEntityId = sensorId.startsWith('sensor.')
+          ? sensorId.replace('sensor.', 'todo.')
+          : sensorId;
+        tasksCount = sortedTasks.length;
+        completedCountValue = completedCount;
+        const model = {
+          id: sensorId,
+          name,
+          palette,
+          initials: deriveInitials(name),
+          tasks: sortedTasks,
+          stars: state?.attributes?.stars || 0,
+          entityId: todoEntityId,
+          progress: {
+            completed: completedCount,
+            total: overriddenTasks.length,
+          },
+          projectId: resolvedProjectId,
+          project,
+          labelOptions: labelOptionsRaw.map(option => ({
+            id: option?.id ?? option?.label ?? option?.name ?? option,
+            name: option?.name ?? option?.label ?? option?.title ?? option?.id ?? option,
+          })),
+          labelLookup,
+        };
+        endTiming({ taskCount: tasksCount, completed: completedCountValue });
+        return model;
+      } catch (error) {
+        endTiming({ status: 'error', error: error?.message ?? String(error) });
+        throw error;
+      }
     },
     [statusOverrides]
   );

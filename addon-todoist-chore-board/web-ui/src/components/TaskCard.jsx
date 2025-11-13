@@ -1,6 +1,6 @@
 // addon-todoist-chore-board/web-ui/src/components/TaskCard.jsx
 import React, { useMemo, useState } from 'react';
-import { callService } from '../hass';
+import { callService, startTiming, emitLog as logClientMessage } from '../hass';
 
 const PRIORITY_LABELS = {
   1: 'Low',
@@ -29,19 +29,22 @@ const TaskCard = ({ task, entityId, palette, onSelect, onStatusChange, showEmoji
   const handleComplete = async event => {
     event.stopPropagation();
     if (isCompleting || task.isCompleted) {
+      logClientMessage('debug', 'Task already completing or completed; skipping', {
+        taskId: task.id,
+      });
       return;
     }
 
     const rawUid = task.uid ?? task.id ?? null;
     if (!rawUid) {
-      console.error('Task is missing a uid; cannot complete item', task);
+      logClientMessage('error', 'Task is missing a uid; cannot complete item', task);
       return;
     }
 
     const uid = String(rawUid);
     const resolvedEntityId = entityId ? String(entityId) : '';
     if (!resolvedEntityId) {
-      console.error('Task is missing a resolved entity id; cannot complete item', {
+      logClientMessage('error', 'Task is missing a resolved entity id; cannot complete item', {
         task,
         entityId,
       });
@@ -53,12 +56,21 @@ const TaskCard = ({ task, entityId, palette, onSelect, onStatusChange, showEmoji
       item: uid,
       status: 'completed',
     };
+    const endTiming = startTiming('TaskCard.handleComplete', {
+      taskId: uid,
+      entityId: resolvedEntityId,
+    });
     setIsCompleting(true);
     try {
       await callService('todo', 'update_item', payload);
       onStatusChange?.(true);
+      endTiming({ status: 'success' });
     } catch (error) {
-      console.error('Failed to complete task:', error);
+      logClientMessage('error', 'Failed to complete task', {
+        error,
+        payload,
+      });
+      endTiming({ status: 'error', error: error?.message ?? String(error) });
     } finally {
       setIsCompleting(false);
     }

@@ -11,6 +11,7 @@ import {
 const LOG_BUFFER_KEY = '__TODOIST_ADDON_DEBUG_LOGS__';
 const TOKEN_STORAGE_PREFIX = '__TODOIST_ADDON_HASS_TOKENS__';
 const AUTH_CALLBACK_PARAM = 'auth_callback';
+const PERFORMANCE = typeof globalThis !== 'undefined' ? globalThis.performance : undefined;
 
 if (typeof globalThis === 'object') {
   if (!Object.prototype.hasOwnProperty.call(globalThis, LOG_BUFFER_KEY)) {
@@ -47,6 +48,39 @@ function emitLog(level, ...args) {
 }
 
 emitLog('info', 'Todoist hass.js bundle initialised');
+
+function nowMs() {
+  if (PERFORMANCE?.now) {
+    return PERFORMANCE.now();
+  }
+  return Date.now();
+}
+
+function mergeDetails(base, extra) {
+  if (!base && !extra) {
+    return null;
+  }
+  const result = { ...(typeof base === 'object' && base !== null ? base : {}) };
+  if (typeof extra === 'object' && extra !== null) {
+    Object.assign(result, extra);
+  } else if (extra !== undefined) {
+    result.extra = extra;
+  }
+  return result;
+}
+
+export function startTiming(label, details = null) {
+  const started = nowMs();
+  emitLog('info', `[timing] ${label} started`, details);
+  return (extra = null) => {
+    const duration = nowMs() - started;
+    const context = mergeDetails(details, extra) || {};
+    context.durationMs = Number(duration.toFixed(2));
+    emitLog('info', `[timing] ${label} finished`, context);
+  };
+}
+
+export const logClientMessage = emitLog;
 
 let cachedConnection = null;
 let connectionPromise = null;
@@ -204,6 +238,7 @@ async function createProvidedTokenAuth(hassUrl) {
 }
 
 async function createStandaloneConnection() {
+  const endTiming = startTiming('hass.createStandaloneConnection');
   const endpoints = resolveAuthEndpoints();
 
   const providedAuth = await createProvidedTokenAuth(endpoints.hassUrl).catch((err) => {
@@ -213,6 +248,7 @@ async function createStandaloneConnection() {
 
   if (providedAuth) {
     const connection = await createConnection({ auth: providedAuth });
+    endTiming({ source: 'provided-token' });
     return { connection, auth: providedAuth };
   }
 
@@ -244,18 +280,23 @@ async function createStandaloneConnection() {
 
   clearAuthParamsFromUrl();
   const connection = await createConnection({ auth });
+  endTiming({ source: 'oauth', hassUrl: endpoints.hassUrl });
   return { connection, auth };
 }
 
 async function establishConnection() {
+  const endTiming = startTiming('hass.establishConnection');
   const inherited = await tryInheritedConnection();
   if (inherited) {
     emitLog('info', 'Reusing Home Assistant connection inherited from parent frame');
+    endTiming({ source: 'inherited' });
     return inherited;
   }
 
   emitLog('info', 'Falling back to standalone Home Assistant auth flow');
-  return createStandaloneConnection();
+  const result = await createStandaloneConnection();
+  endTiming({ source: 'standalone' });
+  return result;
 }
 
 async function getConnection() {
@@ -286,25 +327,47 @@ async function getConnection() {
 
 export async function subscribeToEntities(callback) {
   const conn = await getConnection();
-  return subscribeEntities(conn, callback);
+  const endTiming = startTiming('hass.subscribeToEntities');
+  const unsubscribe = await subscribeEntities(conn, callback);
+  endTiming({ status: 'subscribed' });
+  return unsubscribe;
 }
 
 export async function getStates() {
   const conn = await getConnection();
-  const statesArray = await fetchStates(conn);
-  return Array.isArray(statesArray)
-    ? statesArray.reduce((acc, entity) => {
-        acc[entity.entity_id] = entity;
-        return acc;
-      }, {})
-    : statesArray || {};
+  const endTiming = startTiming('hass.getStates');
+  try {
+    const statesArray = await fetchStates(conn);
+    const mapped = Array.isArray(statesArray)
+      ? statesArray.reduce((acc, entity) => {
+          acc[entity.entity_id] = entity;
+          return acc;
+        }, {})
+      : statesArray || {};
+    endTiming({ count: Object.keys(mapped).length });
+    return mapped;
+  } catch (error) {
+    endTiming({ error: error?.message ?? String(error) });
+    throw error;
+  }
 }
 
 export async function callService(domain, service, serviceData) {
   const conn = await getConnection();
-  return callHassService(conn, domain, service, serviceData);
+  const label = `hass.callService ${domain}.${service}`;
+  const endTiming = startTiming(label, { domain, service, serviceData });
+  try {
+    const result = await callHassService(conn, domain, service, serviceData);
+    endTiming({ status: 'ok' });
+    return result;
+  } catch (error) {
+    endTiming({ status: 'error', error: error?.message ?? String(error) });
+    throw error;
+  }
 }
 
 export function getActiveAuth() {
   return activeAuth;
 }
+
+export { emitLog };
